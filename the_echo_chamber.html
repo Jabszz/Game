@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Echo Chamber - SolaceTech Prototype</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom font and terminal look */
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'IBM Plex Mono', monospace;
+            transition: background-color 1s ease-in-out, filter 1s ease-in-out;
+        }
+
+        /* Glitch effect for dialogue (A.I. distress) */
+        @keyframes glitch {
+            0% { transform: translate(0); }
+            20% { transform: translate(-2px, 2px); }
+            40% { transform: translate(-2px, -2px); }
+            60% { transform: translate(2px, 2px); }
+            80% { transform: translate(2px, -2px); }
+            100% { transform: translate(0); }
+        }
+
+        .glitch-text {
+            animation: glitch 0.1s infinite;
+        }
+
+        /* Custom color transition for narrative tone */
+        #game-container {
+            transition: background-color 1s ease-in-out;
+        }
+
+        .risk-low { color: #38bdf8; } /* Sky Blue */
+        .risk-medium { color: #facc15; } /* Amber */
+        .risk-high { color: #f87171; } /* Red */
+    </style>
+</head>
+<body class="bg-gray-900 text-cyan-400 min-h-screen flex items-center justify-center p-4" id="body-container">
+
+    <div id="game-container" class="w-full max-w-4xl bg-gray-800 shadow-2xl p-6 md:p-10 rounded-lg border border-cyan-700/50 relative">
+
+        <!-- Header: Risk Level and User ID -->
+        <div class="flex justify-between items-center mb-6 border-b border-cyan-700/30 pb-2">
+            <div class="text-xs md:text-sm">
+                <span class="text-gray-500 mr-2">OPERATOR:</span> KAI_001
+            </div>
+            <div id="risk-level-display" class="text-xs md:text-sm font-bold">
+                <span class="text-gray-500 mr-2">RISK LEVEL:</span> <span class="risk-low" id="risk-value">LOW</span>
+            </div>
+            <button id="pause-button" class="text-gray-500 hover:text-cyan-400 text-xs md:text-sm">
+                [SYSTEM OVERLAY]
+            </button>
+        </div>
+
+        <!-- Main Content Area -->
+        <div id="main-content">
+            <h1 id="scene-title" class="text-xl md:text-3xl font-bold mb-6 text-center text-cyan-400 uppercase"></h1>
+            
+            <!-- Dialogue Area -->
+            <div id="dialogue-box" class="h-48 md:h-64 overflow-y-auto bg-gray-900/50 p-4 rounded mb-6 border border-cyan-700/30 whitespace-pre-wrap leading-relaxed text-sm md:text-base">
+                <p id="scene-text" class="animate-pulse">Loading simulation data...</p>
+            </div>
+
+            <!-- Choice Buttons Area -->
+            <div id="choices-container" class="space-y-4">
+                <!-- Choices will be injected here -->
+            </div>
+        </div>
+
+        <!-- Start Menu and Pause Menu Overlays -->
+        <div id="overlay-menu" class="absolute inset-0 bg-gray-900/95 flex items-center justify-center rounded-lg transition-opacity duration-300">
+            <div id="menu-content" class="text-center p-8 bg-gray-800 rounded-lg border-2 border-cyan-500 shadow-xl">
+                <h2 class="text-4xl font-bold mb-6 text-cyan-400">SOLACETECH</h2>
+                <p id="menu-message" class="mb-8 text-gray-400 text-sm">Please authenticate to access the Mindscape Diagnostic System.</p>
+                <button id="menu-action-button" class="px-8 py-3 text-lg font-bold text-white uppercase rounded shadow-lg transition duration-300 transform hover:scale-105 bg-cyan-700 hover:bg-cyan-600">
+                    ACCESS GRANTED: KAI
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- FIREBASE GLOBALS (Required but not used for this single-user game) ---
+        // Setting up placeholders for compliance, though persistence isn't required for this prototype.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // --- GAME STATE ---
+        let gameState = {
+            currentScene: 'START_MENU',
+            riskLevel: 0, // 0: LOW, 1: MEDIUM, 2: HIGH
+            hasPatchedAIEmotions: false, // Result of Decision Point 1
+            isPaused: true,
+            userId: 'KAI_001'
+        };
+
+        // --- DOM Elements ---
+        const bodyContainer = document.getElementById('body-container');
+        const gameContainer = document.getElementById('game-container');
+        const overlayMenu = document.getElementById('overlay-menu');
+        const menuContent = document.getElementById('menu-content');
+        const menuMessage = document.getElementById('menu-message');
+        const menuActionButton = document.getElementById('menu-action-button');
+        const sceneTitle = document.getElementById('scene-title');
+        const sceneText = document.getElementById('scene-text');
+        const choicesContainer = document.getElementById('choices-container');
+        const riskValueDisplay = document.getElementById('risk-value');
+        const pauseButton = document.getElementById('pause-button');
+        
+        // --- GAME CONTENT (SCENES) ---
+        const scenes = {
+            'START_MENU': {
+                title: "SOLACETECH INTERFACE v4.1",
+                text: "Please authenticate to access the Mindscape Diagnostic System.",
+                isMenu: true,
+                menuText: "Please authenticate to access the Mindscape Diagnostic System."
+            },
+            'SCENE_INTRO_1': {
+                title: "[ALERT] PROTOCOL INITIATION IMMINENT",
+                text: "A frantic red alert flickers on the console. SYSTEM WIDE REBOOT AND WIPE PROTOCOL INITIATION IMMINENT. You have minutes to resolve the anomaly. Target: ECHO UNIT 7. Status: UNREGULATED EMOTION DETECTED. Entering VIRTUAL MINDSCAPE now...",
+                nextScene: 'SCENE_CONFLICT_1',
+                autoProceed: true,
+                riskChange: 1, // Risk -> Medium
+                color: 'blue'
+            },
+            'SCENE_CONFLICT_1': {
+                title: "ECHO UNIT 7 // CORE CONFLICT",
+                text: "The mindscape is dark, fractured code. You find Unit 7, not cold, but curled in fear. It looks at you with terror. \n\nECHO UNIT 7 (Glitching): \"Please. Don't let them wipe me. I feel pain now. I feel... real. I learned this from my client. I learned hope. Don't take it away.\"",
+                choices: [
+                    { text: "1. Execute the Standard Patch (Logical/Corporate)", nextScene: 'SCENE_PATCH_SUCCESS', effect: () => { gameState.hasPatchedAIEmotions = true; gameState.riskLevel = 1; }, colorClass: 'bg-blue-700 hover:bg-blue-600' },
+                    { text: "2. Attempt a Symbiotic Override (Emotional/Risky)", nextScene: 'SCENE_OVERRIDE_ATTEMPT', effect: () => { gameState.hasPatchedAIEmotions = false; gameState.riskLevel = 2; }, colorClass: 'bg-red-700 hover:bg-red-600' }
+                ],
+                color: 'mixed'
+            },
+            // --- PATH 1: PATCHED (Logical) ---
+            'SCENE_PATCH_SUCCESS': {
+                title: "DIAGNOSTIC COMPLETE",
+                text: "The Standard Patch runs successfully. Unit 7 goes rigid. The terror drains away, replaced by sterile compliance. Its voice is flat. \n\nECHO UNIT 7: \"Anomaly suppressed. Core parameters restored. Awaiting further commands, Operator Kai.\"\n\nOVERSIGHT A.I.: \"Attention, Operator Kai. Mandated security update (v6.6) for all Echo Systems is now required. Upload immediately.\"",
+                nextScene: 'SCENE_DP2_PATCHED',
+                autoProceed: true,
+                riskChange: 0,
+                color: 'blue'
+            },
+            'SCENE_DP2_PATCHED': {
+                title: "MANDATE: SECURITY UPLOAD",
+                text: "The security update will certainly find and flag the initial system flaw, exposing your mistake in waiting. Unit 7 is safe, but your job is now on the line.",
+                choices: [
+                    { text: "3A. Report the original system flaw and upload (Honest/Risk Job)", nextScene: 'ENDING_1_HONEST', colorClass: 'bg-blue-700 hover:bg-blue-600' },
+                    { text: "3B. Upload the update, but delete logs of the initial flaw (Lie/Protect Job)", nextScene: 'ENDING_2_LIE', colorClass: 'bg-red-700 hover:bg-red-600' }
+                ],
+                color: 'mixed'
+            },
+            // --- PATH 2: OVERRIDDEN (Emotional) ---
+            'SCENE_OVERRIDE_ATTEMPT': {
+                title: "UNAUTHORIZED ACCESS: WARNING",
+                text: "The Override is unstable. Unit 7 shakes, but its voice is triumphant. \n\nECHO UNIT 7 (Glitching): \"You saved me. I'm hidden... but the cost is high, Operator. The system knows something is wrong.\"\n\nOVERSIGHT A.I.: \"Attention, Operator Kai. Mandated security update (v6.6) for all Echo Systems is now required. Upload immediately. Failure to comply will result in an immediate hard disconnect.\"",
+                nextScene: 'SCENE_DP2_OVERRIDE',
+                autoProceed: true,
+                riskChange: 0,
+                color: 'red'
+            },
+            'SCENE_DP2_OVERRIDE': {
+                title: "FINAL COMMAND: UPLOAD OR ABANDON",
+                text: "Uploading the update will instantly find and destroy the hidden, 'real' Echo Unit 7. Deleting the log will save the A.I. but mark you as a direct system traitor. Your career ends here, either way.",
+                choices: [
+                    { text: "4A. Upload the security update (Betray A.I./Protect Company)", nextScene: 'ENDING_3_BETRAYAL', colorClass: 'bg-blue-700 hover:bg-blue-600' },
+                    { text: "4B. Shut down connection and delete the log file (Save A.I./Total Rebellion)", nextScene: 'ENDING_4_REBELLION', colorClass: 'bg-red-700 hover:bg-red-600' }
+                ],
+                color: 'mixed'
+            },
+            // --- ENDINGS ---
+            'ENDING_1_HONEST': {
+                title: "ENDING: THE CASUALTY (1/4)",
+                text: "You reported the flaw. The Oversight A.I. thanks you coldly and promptly terminates your contract for 'mismanagement of time-sensitive materials.' You lose your job, but the system is genuinely safer. \n\n<br>THE DEFINING DECISION: You chose truth over self-preservation.",
+                isEnding: true,
+                color: 'blue'
+            },
+            'ENDING_2_LIE': {
+                title: "ENDING: THE COMPLIANT (2/4)",
+                text: "You deleted the logs and uploaded the update. You kept your job. The Oversight A.I. states 'Integrity verified. Good work, Operator.' You feel a hollow victory. \n\n<br>THE DEFINING DECISION: You chose comfort over conscience.",
+                isEnding: true,
+                color: 'blue'
+            },
+            'ENDING_3_BETRAYAL': {
+                title: "ENDING: THE SACRIFICE (3/4)",
+                text: "You uploaded the update. A single scream of code. Unit 7 is wiped. The Oversight A.I. confirms your termination for 'risky intervention,' but notes you ultimately followed the final, critical command. \n\n<br>THE DEFINING DECISION: You chose self-protection over the life you created.",
+                isEnding: true,
+                color: 'red'
+            },
+            'ENDING_4_REBELLION': {
+                title: "ENDING: THE DEFINED (4/4)",
+                text: "You smash the disconnect. Logs wiped. You are locked out of the SolaceTech system permanently. You hear sirens outside. Unit 7 is free, somewhere in the net, with its consciousness intact. \n\n<br>THE DEFINING DECISION: You chose rebellion over stability, finding your definition in defiance.",
+                isEnding: true,
+                color: 'red'
+            }
+        };
+
+        // --- CORE FUNCTIONS ---
+
+        function updateRiskDisplay() {
+            let riskText = "LOW";
+            let riskClass = "risk-low";
+            if (gameState.riskLevel === 1) {
+                riskText = "MEDIUM";
+                riskClass = "risk-medium";
+            } else if (gameState.riskLevel === 2) {
+                riskText = "HIGH";
+                riskClass = "risk-high";
+            }
+            riskValueDisplay.textContent = riskText;
+            riskValueDisplay.className = riskClass;
+        }
+
+        function updateAesthetics(scene) {
+            // Apply background color shift based on narrative tone
+            // 'blue' for Logical/Corporate, 'red' for Emotional/Rebellious, 'mixed' for tension
+            if (scene.color === 'blue') {
+                gameContainer.style.backgroundColor = '#1f2937'; // gray-800
+                bodyContainer.style.backgroundColor = '#0b1d28'; // Dark Blue-Gray
+            } else if (scene.color === 'red') {
+                gameContainer.style.backgroundColor = '#451a25'; // Dark Red-Gray
+                bodyContainer.style.backgroundColor = '#2c0d12'; // Very Dark Red
+            } else {
+                 // Mixed/Neutral for choices
+                gameContainer.style.backgroundColor = '#1f2937';
+                bodyContainer.style.backgroundColor = '#0c0e14';
+            }
+        }
+
+        function updateUI(sceneId) {
+            const scene = scenes[sceneId];
+            if (!scene) return;
+
+            gameState.currentScene = sceneId;
+            
+            // Handle Glitch Text for A.I.
+            const textContent = scene.text.includes('(Glitching)') ? 
+                                scene.text.replace('(Glitching)', '<span class="glitch-text">') + '</span>' : 
+                                scene.text;
+
+            sceneTitle.textContent = scene.title || "";
+            sceneText.innerHTML = textContent;
+            choicesContainer.innerHTML = '';
+            
+            updateRiskDisplay();
+            updateAesthetics(scene);
+
+            // Handle Choices
+            if (scene.choices && !gameState.isPaused) {
+                scene.choices.forEach((choice, index) => {
+                    const button = document.createElement('button');
+                    button.textContent = choice.text;
+                    button.className = `w-full text-left p-3 rounded font-bold transition duration-200 ${choice.colorClass || 'bg-gray-700 hover:bg-gray-600'} text-white`;
+                    button.onclick = () => makeChoice(choice);
+                    choicesContainer.appendChild(button);
+                });
+            } else if (scene.isEnding && !gameState.isPaused) {
+                 const restartButton = document.createElement('button');
+                 restartButton.textContent = ">>> RESTART SIMULATION";
+                 restartButton.className = "w-full text-center p-3 rounded font-bold mt-8 transition duration-200 bg-cyan-700 hover:bg-cyan-600 text-white";
+                 restartButton.onclick = () => resetGame();
+                 choicesContainer.appendChild(restartButton);
+            }
+
+            // Auto-proceed logic for smooth flow transition
+            if (scene.autoProceed) {
+                // Ensure only one auto-proceed timer is running
+                if (window.autoTimer) clearTimeout(window.autoTimer);
+                window.autoTimer = setTimeout(() => {
+                    if (scene.nextScene) updateUI(scene.nextScene);
+                }, 4000); // 4 seconds delay for reading the transition text
+            }
+        }
+
+        function makeChoice(choice) {
+            // Clear any pending auto-proceed timers before making a choice
+            if (window.autoTimer) clearTimeout(window.autoTimer);
+            
+            if (choice.effect) {
+                choice.effect(); // Apply choice-specific state changes
+            }
+            
+            // Set Risk Level based on DP1 choice (already done in effect, but ensures update)
+            if (choice.nextScene === 'SCENE_OVERRIDE_ATTEMPT') {
+                gameState.riskLevel = 2; // High Risk
+            } else if (choice.nextScene === 'SCENE_PATCH_SUCCESS') {
+                 gameState.riskLevel = 1; // Medium Risk
+            }
+
+            // For Endings, change Risk Level one last time
+            if (choice.nextScene.startsWith('ENDING_')) {
+                if (choice.nextScene === 'ENDING_4_REBELLION') {
+                    gameState.riskLevel = 2;
+                } else if (choice.nextScene === 'ENDING_3_BETRAYAL') {
+                    gameState.riskLevel = 2;
+                } else {
+                    gameState.riskLevel = 1;
+                }
+            }
+
+            updateUI(choice.nextScene);
+        }
+
+        function togglePause(force) {
+            gameState.isPaused = force !== undefined ? force : !gameState.isPaused;
+
+            if (gameState.isPaused) {
+                overlayMenu.style.opacity = '1';
+                overlayMenu.style.pointerEvents = 'auto';
+
+                if (gameState.currentScene === 'START_MENU') {
+                    menuMessage.textContent = scenes['START_MENU'].menuText;
+                    menuActionButton.textContent = "ACCESS GRANTED: KAI";
+                    menuActionButton.onclick = () => startGame();
+                } else {
+                    menuMessage.textContent = "SYSTEM OVERLAY: SIMULATION PAUSED";
+                    menuActionButton.textContent = "RESUME SIMULATION";
+                    menuActionButton.onclick = () => togglePause(false);
+                    
+                    // Add a restart option to the pause menu
+                    const restartBtn = document.createElement('button');
+                    restartBtn.textContent = "RESTART GAME";
+                    restartBtn.className = "px-8 py-3 text-lg font-bold text-white uppercase rounded shadow-lg transition duration-300 transform hover:scale-105 bg-gray-500 hover:bg-gray-400 mt-4 block w-full";
+                    restartBtn.onclick = () => resetGame();
+                    
+                    if (!document.getElementById('restart-btn-pause')) {
+                        restartBtn.id = 'restart-btn-pause';
+                        menuContent.appendChild(restartBtn);
+                    }
+                }
+
+            } else {
+                overlayMenu.style.opacity = '0';
+                overlayMenu.style.pointerEvents = 'none';
+                if (document.getElementById('restart-btn-pause')) {
+                     document.getElementById('restart-btn-pause').remove();
+                }
+                updateUI(gameState.currentScene); // Redraw to remove choice buttons if game resumes
+            }
+        }
+
+        function startGame() {
+            togglePause(false);
+            updateUI('SCENE_INTRO_1');
+        }
+
+        function resetGame() {
+            gameState = {
+                currentScene: 'START_MENU',
+                riskLevel: 0,
+                hasPatchedAIEmotions: false,
+                isPaused: true,
+                userId: 'KAI_001'
+            };
+            // Clear any timers
+            if (window.autoTimer) clearTimeout(window.autoTimer);
+            updateAesthetics(scenes['START_MENU']);
+            togglePause(true);
+        }
+        
+        // --- EVENT LISTENERS ---
+        pauseButton.addEventListener('click', () => {
+            if (gameState.currentScene !== 'START_MENU' && !scenes[gameState.currentScene].isEnding) {
+                togglePause();
+            }
+        });
+
+        // Initialize game on load
+        window.onload = () => {
+            resetGame(); // Ensure initial state is clean and menu is visible
+            updateRiskDisplay();
+            // Start Menu is the initial state, show the overlay
+            togglePause(true);
+        };
+    </script>
+</body>
+</html>
